@@ -1,0 +1,84 @@
+---
+title: "Data 607 Assignment 1"
+author: "Steven Ellingson"
+date: "September 1, 2019"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Read Data
+```{r, eval=TRUE}
+data = read.csv('https://archive.ics.uci.edu/ml/machine-learning-databases/mushroom/agaricus-lepiota.data', header = FALSE)
+```
+
+Add Names
+```{r, eval=TRUE}
+names(data) = c('poisonous','cap.shape','cap.surface','cap.color','bruises','odor','gill.attachment','gill.spacing','gill.size','gill.color','stalk.shape','stalk.root','stalk.surface.above.ring','stalk.surface.below.ring','stalk.color.above.ring','stalk.color.below.ring','veil.type','veil.color','ring.number','ring.type','spore.print.color','population','habitat')
+```
+
+Take a look and make sure it looks right
+```{r, eval=TRUE}
+head(data)
+```
+
+Change factors to strings so that I can replace them without issue
+```{r, eval=TRUE}
+data = data.frame(lapply(data, as.character), stringsAsFactors=FALSE)
+```
+
+Going to just take in the factors that have to do with the gills. 
+```{r, eval=TRUE}
+keepers = names(data) %in% c('poisonous','gill.attachment','gill.spacing','gill.size','gill.color')
+data.gill = data[keepers]
+```
+
+Check on new data frame
+```{r, eval=TRUE}
+head(data.gill)
+```
+
+Check to see what values we have for the poisonous column
+```{r, eval=TRUE}
+unique(data.gill$poisonous)
+```
+
+replace all values with better descriptions.
+```{r, eval=TRUE}
+data.gill$poisonous = replace(data.gill$poisonous, data.gill$poisonous=='p', 'poisonous')
+data.gill$poisonous = replace(data.gill$poisonous, data.gill$poisonous=='e', 'unknown')
+data.gill$gill.attachment = replace(data.gill$gill.attachment, data.gill$gill.attachment=='a', 'attached')
+data.gill$gill.attachment = replace(data.gill$gill.attachment, data.gill$gill.attachment=='d', 'descending')
+data.gill$gill.attachment = replace(data.gill$gill.attachment, data.gill$gill.attachment=='f', 'free')
+data.gill$gill.attachment = replace(data.gill$gill.attachment, data.gill$gill.attachment=='n', 'notched')
+data.gill$gill.spacing = replace(data.gill$gill.spacing, data.gill$gill.spacing=='c', 'close')
+data.gill$gill.spacing = replace(data.gill$gill.spacing, data.gill$gill.spacing=='w', 'crowded')
+data.gill$gill.spacing = replace(data.gill$gill.spacing, data.gill$gill.spacing=='d', 'distant')
+data.gill$gill.size = replace(data.gill$gill.size, data.gill$gill.size=='b', 'broad')
+data.gill$gill.size = replace(data.gill$gill.size, data.gill$gill.size=='n', 'narrow')
+data.gill$gill.color = replace(data.gill$gill.color, data.gill$gill.color=='k', 'black')
+data.gill$gill.color = replace(data.gill$gill.color, data.gill$gill.color=='n', 'brown')
+data.gill$gill.color = replace(data.gill$gill.color, data.gill$gill.color=='b', 'buff')
+data.gill$gill.color = replace(data.gill$gill.color, data.gill$gill.color=='h', 'chocolate')
+data.gill$gill.color = replace(data.gill$gill.color, data.gill$gill.color=='g', 'gray')
+data.gill$gill.color = replace(data.gill$gill.color, data.gill$gill.color=='r', 'green')
+data.gill$gill.color = replace(data.gill$gill.color, data.gill$gill.color=='o', 'orange')
+data.gill$gill.color = replace(data.gill$gill.color, data.gill$gill.color=='p', 'pink')
+data.gill$gill.color = replace(data.gill$gill.color, data.gill$gill.color=='u', 'purple')
+data.gill$gill.color = replace(data.gill$gill.color, data.gill$gill.color=='e', 'red')
+data.gill$gill.color = replace(data.gill$gill.color, data.gill$gill.color=='w', 'white')
+data.gill$gill.color = replace(data.gill$gill.color, data.gill$gill.color=='y', 'yellow')
+```
+
+List out the current values for the columns to make sure they were all changed
+```{r, eval=TRUE}
+unique(data.gill$poisonous)
+unique(data.gill$gill.attachment)
+unique(data.gill$gill.spacing)
+unique(data.gill$gill.size)
+unique(data.gill$gill.color)
+```
