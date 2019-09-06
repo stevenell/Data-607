@@ -25,7 +25,6 @@ Connect to local DB.
 redacted code will look like this:  
 con = dbConnect(dbDriver("MySQL"), user='', password='', dbname='cuny', host='',port = 3306)
 ```{r, echo = FALSE}
-con = dbConnect(dbDriver("MySQL"), user='root', password='1uW&573OJ', dbname='cuny', host='127.0.0.1',port = 3306)
 #on.exit(dbDisconnect(con))
 ```
 This is probably not best practice but I have all of the SQL inside of the R code. It was a bit of a challenge to get it all to work but it's nice that it's all together in one document, and it gets completely reset every time I change and re-run.
