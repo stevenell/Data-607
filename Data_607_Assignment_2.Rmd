@@ -1,0 +1,235 @@
+---
+title: "Data-607-Assignment-2"
+author: "Steven Ellingson"
+date: "September 5, 2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+```
+
+I Listed some classic Nicolas Cage movies and had may siblings rate them on Google Sheets. If I had to do it over I would have picked some Marvel movies or something since my data ended up pretty sparse.  
+
+
+```{r}
+library(googlesheets)
+library(RMySQL)
+library(reshape2)
+```
+
+
+Connect to local DB.
+redacted code will look like this:  
+con = dbConnect(dbDriver("MySQL"), user='', password='', dbname='cuny', host='',port = 3306)
+```{r, echo = FALSE}
+con = dbConnect(dbDriver("MySQL"), user='root', password='1uW&573OJ', dbname='cuny', host='127.0.0.1',port = 3306)
+#on.exit(dbDisconnect(con))
+```
+This is probably not best practice but I have all of the SQL inside of the R code. It was a bit of a challenge to get it all to work but it's nice that it's all together in one document, and it gets completely reset every time I change and re-run.
+
+Drop Tables if they exist
+
+```{r}
+res <- dbSendQuery(con,'drop table if exists movie_critics')
+res <- dbSendQuery(con,'drop table if exists movies')
+res <- dbSendQuery(con,'drop table if exists movie_ratings')
+```
+
+Create table to list critics
+```{r}
+res <- dbSendQuery(con,"
+create table movie_critics (
+id int primary key auto_increment,
+name varchar(100)
+)")
+```
+Create table to list movies
+```{r}
+res <- dbSendQuery(con,"
+create table movies (
+id int primary key auto_increment,
+name varchar(100)
+)")
+```
+Create table of ratings
+I created "rating" as a decimal in case someone put a half star.
+```{r}
+res <- dbSendQuery(con,"
+create table movie_ratings(
+id int primary key auto_increment,
+critic_id int,
+movie_id int,
+rating decimal(14,4)
+)")
+```
+Use stored token to get access to Google Sheets
+```{r}
+gs_auth(token = "googlesheets_token.rds")
+```
+Pull in the spreadsheet
+```{r}
+sheet <- gs_url('https://docs.google.com/spreadsheets/d/1eMTKJkwgP0mZup-25iF0u67EzgFUBEJYx3V3A5Khi_E')
+sheet
+```
+List out the worksheets 
+```{r}
+gs_ws_ls(sheet)
+```
+First Insert the movie critics into the table
+```{r}
+query <- paste("INSERT INTO movie_critics (name) VALUES", paste("('",gs_ws_ls(sheet), "')", collapse = ", ", sep = ""), sep = "")
+res <- dbSendQuery(con,query)
+```
+Now let's define a couple of functions to read our data and push into DB
+
+This function should be run for each worksheet  
+It will pull id for the critic, then use the "insert_rating" function to insert the rows
+```{r}
+read_worksheet <- function(ss, ws) {
+  
+  # Get ID from table for this critic
+  res <- dbSendQuery(con, paste0("select id from movie_critics where lower(name) = '",ws,"'"))
+  data <- fetch(res,n=-1)
+  
+  if (nrow(data) > 1) {
+    print(paste("WARNING, MULITPLE CRITICS WITH NAME",ws))
+  } else if (nrow(data) == 0) {
+    print(paste("WARNING, NO CRITICS WITH NAME",ws))
+  } else {
+    critic_id = data$id[1]
+  }
+  
+  ratings <- gs_read(ss, ws)
+  apply(ratings, 1, function(x) insert_rating(ss,critic_id,x))
+}
+```
+This function should be run for every each individual rating  
+It will get the ids for the critic and movie and insert into DB
+```{r}
+
+insert_rating <- function(ss, critic_id, rating_row) {
+  #Extract Movie and Rating from Row
+  movie = rating_row['Movie']
+  rating = rating_row['Rating']
+  
+  #Get ID for movie from table
+  res <- dbSendQuery(con, paste0("select id from movies where lower(name) = '",tolower(movie),"'"))
+  data <- fetch(res,n=-1)
+  
+  if (nrow(data) > 1) {
+    print(paste("WARNING, MULITPLE MOVIES WITH NAME",movie))
+  } else if (nrow(data) == 0) {
+    #there is no entry for this movie, so add it!
+    res <- dbSendQuery(con, paste0("insert into movies (name) values ('",movie,"')"))
+  }
+  
+  # Run Query again in case it wasn't there
+  res <- dbSendQuery(con, paste0("select id from movies where lower(name) = '",movie,"'"))
+  data <- fetch(res, n=-1)
+  # Assume the first one is the one we want
+  movie_id = data$id[1]
+  
+  # I didn't give clear instructions on what to do if you haven't seen the movie
+  # we'll assume anything that isn't a number should go in as null, but also give a warning
+  
+  if (is.na(as.numeric(rating))) {
+    if (is.na(rating)) {
+      print(paste0("Warning - N/A for ",critic_id,",",movie_id,': this is probably OK because it was N/A in google sheets'))
+    } else {
+      print(paste0("Warning - N/A for ",critic_id,",",movie_id,': "',rating,'" was changed to N/A!'))
+    }
+    # Either way, lets change to "null" so it can be inserted into DB
+    rating = 'null'
+  }
+  
+
+  res <- dbSendQuery(con, paste0("insert into movie_ratings (critic_id,movie_id,rating) values (",critic_id,",",movie_id,",",rating,")"))
+  
+}
+```
+Use the above functions to insert the data
+```{r}
+sapply(gs_ws_ls(sheet), function(x) read_worksheet(sheet,x))
+```
+OK, the warnings look reasonable (changing "Didn't Watch" and "N/A" to N/A seems ok) so lets pull our data into a data frame
+```{r}
+query = "select 
+	mc.name as critic,
+    m.name as movie,
+    mr.rating
+ from movie_ratings mr
+ left join movies m on mr.movie_id = m.id
+ left join movie_critics mc on mr.critic_id = mc.id"
+
+res <- dbSendQuery(con, query)
+data <- fetch(res, n=-1)
+```
+```{r}
+str(data)
+```
+looks ok at a glance  Lets change it so the critics and movies are the row and column names
+```{r}
+data.pivot = dcast(data, movie ~ critic,value.var = "rating")
+data.pivot
+```
+What the heck, there is a movie titled "Bangkok Dangerous2".  Since I don't believe that picture got a sequel I think something is wrong.
+```{r}
+data[data$movie=="Bangkok Dangerous2",]
+```
+I'm going to assume that Katie tried to put in a rating of 2 for "Bangkok Dangerous"
+In real life I would fix this either in the spreadsheet itself or in the database, but for this exercize I'll just fix the data frame
+```{r}
+data[data$movie=="Bangkok Dangerous2",'rating'] = 2
+data[data$movie=="Bangkok Dangerous2",'movie'] = "Bangkok Dangerous"
+```
+Let's try that again
+```{r}
+data.pivot = dcast(data, movie ~ critic,value.var = "rating")
+data.pivot
+```
+lets change our row names to the movie titles
+```{r}
+row.names(data.pivot) = data.pivot$movie
+data.pivot['movie']=NULL
+```
+Since we have our data we may as well take a look at some summary statistics
+
+Check how many people watched each movie
+```{r}
+5-rowSums(is.na(data.pivot))
+```
+National Treasure and Face/Off were seen by everyone.  Only a couple saw Raising Arizona and The Rock, which is disappointing
+
+How many responses did I get per person
+```{r}
+5-colSums(is.na(data.pivot))
+```
+I saw all of them, which makes sense since I picked the movies.  My younger siblings David and Katie are missing out.
+
+Let's look at the average rating by movie
+```{r}
+round(rowMeans(data.pivot,na.rm=TRUE), 1)
+```
+More evidence that Katie and David should watch Raising Arizona and The Rock
+
+And average rating by critic
+```{r}
+round(colMeans(data.pivot,na.rm=TRUE), 1)
+```
+
+Katie seems to be a pretty harsh critic. I wonder if we adjust the movie ratings based on the users average rating if that would adjust our results  
+This is a pretty silly thing to do with such a sparse dataset, but it's my own fault I guess
+```{r}
+data.normalized <- round(sweep(data.pivot,2,colMeans(data.pivot,na.rm=TRUE),'/'), 1)
+```
+Let's now multiply by overall rating average to get it back on the same scale
+```{r}
+data.normalized <- data.normalized*mean(data$rating, na.rm=TRUE)
+rbind(round(rowMeans(data.pivot,na.rm=TRUE), 1),
+round(rowMeans(data.normalized,na.rm=TRUE), 1))
+```
+Looking at iot this way, action classics "The Rock and "Con Air" get taken down a notch while Bangkok Dangerous looks less pitiful
+
