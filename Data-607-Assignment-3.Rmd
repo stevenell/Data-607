@@ -1,0 +1,106 @@
+---
+title: "Data_607_Assignment_3"
+author: "Steven Ellingson"
+date: "September 9, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+3. Copy the introductory example. The vector name stores the extracted names.
+(a) Use the tools of this chapter to rearrange the vector so that all elements conform to
+the standard first_name last_name.
+
+```{r}
+library('stringr')
+raw.data = "555-1239Moe Szyslak(636) 555-0113 Burns, C. Montgomery555-6542Rev. Timothy Lovejoy555 8904Ned Flanders636-555-3226Simpson, Homer5553642Dr. Julius Hibbert"
+name = unlist(str_extract_all(raw.data,"[[:alpha:] ,.]{2,}"))
+```
+**This will do most of the work: find the commas and put the last names at the end if they find one:**
+```{r}
+name = paste(str_replace(name,'[[:alpha:]., ]+,',''), str_replace_na(str_extract(name,'[[:alpha:]]+,'),''))
+name
+```
+**Only issue now is some trailing spaces and commas**
+```{r}
+name = str_trim(str_replace(name, ',$',''))
+name
+```
+(b) Construct a logical vector indicating whether a character has a title (i.e., Rev. and Dr.).  
+**I found a list of common titles on the internet, I'll assume this is inclusive for now**
+```{r}
+common.titles = c('Dr', 'Esq', 'Hon', 'Jr', 'Mr', 'Mrs', 'Ms', 'Messrs', 'Mmes', 'Msgr', 'Prof', 'Rev', 'Rt Hon', 'Sr', 'St')
+```
+ **This should build a big ugly expression that looks for one of these titles at the beginning of the word followed by a "."**
+```{r}
+title.expression = paste(paste('\\b',common.titles,'\\.',sep=""),collapse="|")
+title.expression
+```
+**Look for those titles, ignoring case**
+```{r}
+has.title = str_detect(name, regex(title.expression, ignore_case=TRUE))
+cbind(name, has.title)
+```
+(c) Construct a logical vector indicating whether a character has a second name.  
+**I want to count the names, which is easy, but I don't want to include titles since those aren't actually second names.**  
+**I will use as.integer(has.title) to "count" 1 if it has a title, then subtract that from the name count**
+
+```{r}
+second.name <- str_count(name,'[[:alpha:]]+')-as.integer(has.title)>=3
+cbind(name, second.name)
+```
+4. Describe the types of strings that conform to the following regular expressions and
+construct an example that is matched by the regular expression.
+(a) [0-9]+\\$  
+**Any number of digits with a $ at the end**
+```{r}
+str_detect('12341234$', '[0-9]+\\$')
+```
+(b) \\b[a-z]{1,4}\\b  
+**A 1-4 letter word, all lowercase**
+```{r}
+str_detect('duck', '\\b[a-z]{1,4}\\b')
+```
+(c) .*?\\.txt$  
+**Text file - any number of characters with .txt at the end**
+```{r}
+str_detect('blah blah blah 123.txt', '.*?\\.txt$')
+```
+(d) \\d{2}/\\d{2}/\\d{4}  
+**A date in EXACTLY MM/DD/YYYY format (i/e 7/5/2019 would not work)**
+```{r}
+str_detect('02/22/1985', '\\d{2}/\\d{2}/\\d{4}')
+```
+(e) <(.+?)>.+?</\\1>  
+**These would be HTML tags an opening with anything in it <>, any number of characters in between, then a  close </> with the EXACT same character string from the opening**
+```{r}
+str_detect('<class>Data 607</class>', '<(.+?)>.+?</\\1>')
+```
+
+
+9. The following code hides a secret message. Crack it with R and regular expressions.
+Hint: Some of the characters are more revealing than others! The code snippet is also
+available in the materials at www.r-datacollection.com.  
+```{r}
+raw.message <- 'clcopCow1zmstc0d87wnkig7OvdicpNuggvhryn92Gjuwczi8hqrfpRxs5Aj5dwpn0TanwoUwisdij7Lj8kpf03AT5Idr3coc0bt7yczjatOaootj55t3Nj3ne6c4Sfek.r1w1YwwojigOd6vrfUrbz2.2bkAnbhzgv4R9i05zEcrop.wAgnb.SqoU65fPa1otfb7wEm24k6t3sR9zqe5fy89n6Nd5t9kc4fE905gmc4Rgxo5nhDk!gr'
+```
+**Going to pull out a few different categories to see if I can make sense of it **
+```{r}
+unlist(str_extract_all(raw.message,'\\d+'))
+unlist(str_extract_all(raw.message,'[a-z]+'))
+unlist(str_extract_all(raw.message,'[A-Z]+'))
+
+```
+
+**Well I can see what the message is supposed to be, but I'm wondering if the punctuation is helpful as well.  Lets get rid of lower case letter and digits:**
+
+```{r}
+str_replace_all(str_replace_all(raw.message,'[a-z]+',''), '\\d+', '')
+```
+**There we go.  Just one more change**
+```{r}
+str_replace_all(str_replace_all(str_replace_all(raw.message,'[a-z]+',''), '\\d+', ''), '\\.', ' ')
+```
+
