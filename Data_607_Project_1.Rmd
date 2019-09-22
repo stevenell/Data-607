@@ -1,0 +1,91 @@
+---
+title: "Data 607 Project 1"
+author: "Steven Ellingson"
+date: "September 10, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Pull in data.  Instead of pulling in line by line, I'm going to just pull it into one big chunk.
+```{r, message=FALSE, warning=FALSE}
+library(stringr)
+library(dplyr)
+raw.data <- readChar('tournamentinfo.txt',file.info('tournamentinfo.txt')$size)
+
+```
+Get rid of the ----'s and pull each player's data onto one line
+```{r}
+data.raw.2 <-unlist(str_replace_all(str_replace_all(raw.data,'\n',''),'-{89}','\n'))
+data.lines <- unlist(strsplit(data.raw.2,'\n'))
+head(data.lines)
+```
+
+Remove the top line as it's blank.  Split out some fields that are deliminated in different ways and clean up results
+```{r}
+data.lines <- data.lines[-1]
+data.lines <- str_replace_all(data.lines,'\r','')
+data.lines.2 <- str_replace_all(data.lines,'/','|')
+data.lines.2 <- str_replace_all(data.lines.2,'->','|')
+data.lines.2 <- str_trim(str_replace_all(data.lines.2,' *\\| *','|'))
+head(data.lines.2)
+```
+
+Now each of the lines have the fields separated by a |.  The headers don't all make sense but I'll leave them for now.
+Let's pull just the data we need into a dataset.  I'll keep opponents as a comma separated list for now and pull the opponent's rating after.
+```{r}
+#This function will split out just the data we need and return it as a vector
+pullData = function(v) {
+  data = unlist(str_split(v, '\\|'))
+  id = data[1]
+  name = data[2]
+  state = data[11]
+  points = data[3]
+  prerating = unlist(str_split(unlist(str_split(data[13], ' +'))[2], 'P'))[1]
+  opponents = sapply(data[4:10],function(x) unlist(str_extract_all(x, '\\d+')))
+  opponentString = str_replace_all(paste(opponents,collapse=","),'character\\(0\\)','')
+  return(c(id,name,state,points,prerating,opponentString))
+}
+
+#Apply the function over our list to create a dataframe
+data.lines.3 <- data.frame(do.call(rbind,lapply(data.lines.2, pullData)),stringsAsFactors = FALSE)
+
+#Fix column names and remove the first line, as that is the header
+colnames(data.lines.3) <- c('ID','Name','State','Points','Pre-Rating','OpponentList')
+data.lines.3 = data.lines.3[-1, ]
+
+#Now that we removed the header we can fix our numeric data.
+data.lines.3$ID = type.convert(data.lines.3$ID)
+data.lines.3['Pre-Rating'] = type.convert(data.lines.3[,'Pre-Rating'])
+#Set the rows namesto the ID
+rownames(data.lines.3) = data.lines.3$ID
+
+head(data.lines.3)
+```
+
+
+OK, so now I just need a function to loop through the "OpponentList" and take an average of the opponent's prerating
+
+```{r}
+#This function will pull in a comma separated list and average the ratings for that list of player IDs
+opponentAverage = function(l) {
+  v = unlist(str_split(l,','))
+  v = v[v != ""]
+  v = type.convert(v)
+  ratings = round(as.double(lapply(v, function(x) data.lines.3[x,'Pre-Rating'])), 1)
+  return(mean(ratings))
+}
+
+#Apply over our data frame
+data.lines.3$OpponentAverage <- as.double(lapply(data.lines.3$OpponentList,opponentAverage))
+
+#Remove the ID and OpponenetList as we don't want those in our final data set.
+data.final = select(data.lines.3,-c(ID,OpponentList))
+head(data.final)
+```
+
+Looks pretty good! Let's save our csv.
+```{r}
+write.csv(data.final, 'chess_player_list.csv', row.names=FALSE)
+```
