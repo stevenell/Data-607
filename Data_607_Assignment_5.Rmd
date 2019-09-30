@@ -1,0 +1,83 @@
+---
+title: "Data_607_Assignment_5"
+author: "Steven Ellingson"
+date: "September 29, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Read Data from CSV
+```{r, message=FALSE, warning=FALSE}
+library(tidyr)
+library(dplyr)
+library(plyr)
+library(ggplot2)
+
+data = read.csv('flight_delays.txt')
+
+data
+```
+We have two main issues - 'city' needs to be moved from columns to a variable, and status should be columns.  Let's start by melting the city columns
+```{r}
+data2 <- gather(data,-airline, -status,key = 'city', value = 'frequency')
+data2
+```
+
+We now need to cast the "status" into two columns. Also let's fix the .'s in the city names
+```{r}
+
+data3 = spread(data2,key = status,value = 'frequency')
+data3$city = sub('\\.',' ',data3$city)
+data3
+```
+
+
+Let's look at the overall percentage delayed by airline
+```{r}
+ddply(data3, "airline", summarize,
+ sum_delay = sum(delayed),
+ sum_ontime = sum(`on time`),
+ pct_delay =  sum(delayed)/(sum(delayed)+sum(`on time`))
+ )
+
+```
+
+So, Alaska seems to have more delayed flights overall. But how does it look within the city groups?  I'll add a percentage of delayed flights, and plot the results
+
+```{r}
+
+data3$delay_percent = data3$delayed/(data3$delayed+data3$'on time')
+
+ggplot(data3, aes(city, delay_percent, fill=airline)) + 
+       geom_bar(position="dodge", stat="identity")
+
+```
+
+This is showing the opposite conclusion.  AM West has more delays in each city.  The reason that they have fewer delays overall is that they have a high frequency of flights in a low-delay city (Phoenix).
+
+Let's create a logistic regression model using 'city' and 'airline'.  This should give us an idea of if this difference is statistically significant.
+```{r}
+counts = cbind(data3$delayed, data3$`on time`)
+
+model = glm(counts ~  city + airline, data = data3, family=binomial(link="logit"))
+summary(model)
+```
+
+As you can see, the dummy variable 'airlineam west' has a significant positive effect (P Value around 0.0000000001).  Positive in this case means higher rate of delays. Let's pull in the predictions from this model, then summarize by city to see the effect that airline would have on your chances of a delay. I multiplied the predictions by 100 to make them easier to look at.
+
+```{r}
+data3$prediction = round(predict(model,type = "response")*100,1)
+
+data3
+
+data4 = select(data3, city, airline, prediction)
+
+data4 = spread(data4,key = airline,value = 'prediction')
+data4$diff = data4$`am west`-data4$alaska
+data4
+```
+
+It depends on the city you're in, but your expected delay rate is between 3-10% higher if you fly with AM West instead of Alaska.
