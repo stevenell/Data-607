@@ -1,0 +1,218 @@
+---
+title: "Data 607 Project 1"
+author: "Steven Ellingson"
+date: "September 10, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+This is the Chess tournament dataset from our previous project. We created a tidy-ish dataset at the end, but I thought I could take it a bit further by separating the matches from the players and doing some analysis on the matches. e main thing I wanted to see was if the results of a player's previous match could help predict the outcome of this match, given theirs and their opponent rating.   
+
+I won't explain much on the first steps here as they are explained in more detail here: http://rpubs.com/StevenEllingson/530769
+```{r, message=FALSE, warning=FALSE}
+library(stringr)
+library(dplyr)
+library(nnet)
+library(tidyr)
+raw.data <- readChar('tournamentinfo.txt',file.info('tournamentinfo.txt')$size)
+data.raw.2 <-unlist(str_replace_all(str_replace_all(raw.data,'\n',''),'-{89}','\n'))
+data.lines <- unlist(strsplit(data.raw.2,'\n'))
+data.lines <- data.lines[-1]
+data.lines <- str_replace_all(data.lines,'\r','')
+data.lines.2 <- str_replace_all(data.lines,'/','|')
+data.lines.2 <- str_replace_all(data.lines.2,'->','|')
+data.lines.2 <- str_trim(str_replace_all(data.lines.2,' *\\| *','|'))
+head(data.lines.2)
+```
+
+
+This function will take a line of match data (opponent/win/color) and insert into dataframe.  
+The match data is "relative" to the player, so we want to translate to a more static language.  
+The match should look the same in the dataset whether it came from one player's record or the others.
+```{r}
+
+match_insert = function(x) {
+  
+  if(x['winLoss']=='W' | x['winLoss']=='L' | x['winLoss']=='D' ) {
+    
+    if (x['color']=='W') {
+      white = as.integer(x['id'])
+      black = as.integer(x['opponent'])
+      if (x['winLoss']=='W') {
+        winner = 'W'
+      } else if (x['winLoss']=='L') {
+        winner = 'B'
+      } else {
+        winner = 'D'
+      }
+    } else {
+      white = as.integer(x['opponent'])
+      black = as.integer(x['id'])
+      if (x['winLoss']=='W') {
+        winner = 'B'
+      } else if (x['winLoss']=='L') {
+        winner = 'W'
+      } else {
+        winner = 'D'
+      }
+    }
+    round = as.integer(x['round'])
+    return(as.data.frame(t(c('round'=round,'white'=white,'black'=black,'winner'=winner)),stringsAsFactors=FALSE))
+  }
+}
+   
+```
+This function is similar to the one I used to pull the needed information for the first project.  I'm changing it a bit here since I want to use the above function on each record to insert the match data.
+```{r}
+
+pullData = function(v) {
+  data = unlist(str_split(v, '\\|'))
+  id = data[1]
+  name = data[2]
+  points = data[3]
+  state = data[11]
+  prerating = unlist(str_split(unlist(str_split(data[13], ' +'))[2], 'P'))[1]
+  postrating = data[14]
+  uscf_id = data[12]
+
+  opponent = sapply(data[4:10],function(x) unlist(str_extract_all(x, '\\d+')))
+  winLoss = sapply(data[4:10],function(x) unlist(str_extract_all(x, '^.')))
+  color = data[16:22]
+  temp_matches <- cbind(id,opponent,winLoss,color,round=1:7)
+  temp_matches_2 <- data.frame(do.call(rbind,apply(temp_matches, 1, match_insert)),stringsAsFactors = FALSE)
+  matches <<- matches
+  matches <<- as.data.frame(rbind(matches, temp_matches_2),stringsAsFactors=FALSE)
+  return(c(id,name,state,points,prerating,postrating,uscf_id))
+}
+
+```
+Now we'll run the pullData function for each player, which will runn the match_insert function for each match.
+```{r}
+#Create blank DF for matches
+matches = data.frame(round=integer(),white=integer(),black = integer(),winner=character(),
+                     stringsAsFactors = FALSE)
+
+#Apply the function over our list to create a dataframe
+players <- data.frame(do.call(rbind,lapply(data.lines.2[-1], pullData)),stringsAsFactors = FALSE)
+
+#Fix column names and remove the first line, as that is the header
+colnames(players) <- c('ID','Name','State','Points','Pre-Rating','Post-Rating','USCF_ID')
+
+
+#Fix our numeric data.
+players$ID = type.convert(players$ID)
+players['Pre-Rating'] = type.convert(players[,'Pre-Rating'])
+players['Post-Rating'] = type.convert(players[,'Post-Rating'])
+matches$round = type.convert(matches$round)
+matches$white = type.convert(matches$white)
+matches$black = type.convert(matches$black)
+matches = drop_na(matches,round)
+
+#Set the rows namesto the ID, and remove the weird rownames from the matches data set
+rownames(players) = players$ID
+rownames(matches) = c()
+
+head(players)
+head(matches)
+
+```
+
+The only issue now is that the matches are all in there twice, since both players have a record for each game. As I said above, the match should look exactly the same despite which record it came from. Let's make sure that this is true.
+
+```{r}
+c(nrow(matches),
+nrow(unique(matches)))
+```
+Exactly half of the matches are duplicates.  Let's remove them.   
+```{r}
+matches <- unique(matches)
+```
+
+I would say our datasets are now tidy. Unfortunately for the analysis I wanted to do I need to create a less tidy combination of the two datasets, with some repeated information about the players appended to the match results.
+
+While I do think the way the data is structured is the tidiest form, it does make it tougher to use in some ways. Finding a player's last game is a bit of a struggle since you need to join on a different column depending on if they were using the black or white pieces.
+
+I'm going to add a column which indicates what the pre-ratings are for the players, and the result of their last round.  I'm going to put an 'F' for First round for all the first round matches
+
+```{r}
+
+match_data = inner_join(inner_join(matches,players[c('ID','Pre-Rating')],by=c('white'='ID')), players[c('ID','Pre-Rating')],by=c('black'='ID'))
+
+head(match_data)
+
+#Fix the auto-named columns
+match_data = rename(match_data,'pre_rating_black' = 'Pre-Rating.x','pre_rating_white' = 'Pre-Rating.y')
+
+#This function return the result find the last match, by searching in both the "white" and "black" columns for their ID
+last_match = function(id,round) {
+  last_round = as.numeric(round) - 1
+  if(last_round == 0) {
+    return('F')
+  } else {
+    winner = unlist(filter(match_data, round == last_round  & white == id)[1,'winner'])
+    if (!is.na(winner)) {
+      if (winner == 'W') {
+        result = 'W'
+      } else if (winner == 'B') {
+        result = 'L'
+      } else {
+        result = winner
+      }
+    } else {
+      winner = unlist(filter(match_data, round == last_round  & black == id)[1,'winner'])
+      if (!is.na(winner)) {
+        if (winner == 'W') {
+          result = 'L'
+        } else if (winner == 'B') {
+          result = 'W'
+        } else {
+          result = winner
+        } 
+      } else {
+        result = 'B'
+      }
+    }
+    return(result)
+  }
+}
+
+match_data['last_result_white'] = apply(match_data,1,function(x) last_match(x['white'],x['round']))
+match_data['last_result_black'] = apply(match_data,1,function(x) last_match(x['black'],x['round']))
+
+cbind(table(match_data$last_result_black),
+table(match_data$last_result_white))
+
+```
+Now we can create a multinomail classification model to predict the winner.  Because draws are a possibility, we can't use a simple logistic regression.
+```{r}
+
+
+white_winner = 
+
+#refactor so the "baseline" is "draw"
+match_data$winner <- relevel(as.factor(match_data$winner), ref = "D")
+
+model <- multinom(data=match_data,winner ~pre_rating_black+pre_rating_white+last_result_white +last_result_black)
+
+summ <- summary(model)
+#This package doesn't automatically calculate p values, so calculate manually
+z <- summ$coefficients/summ$standard.errors
+p <- (1 - pnorm(abs(z), 0, 1)) * 2
+
+summ$coefficients
+summ2 <- as.data.frame(t(rbind(summ$coefficients,p)))
+names(summ2) = c('coef_black','coef_white','p_black','p_white')
+summ2
+
+
+```
+OK, so there's a lot of information crammed together here, but I like being able to see the coefficients as well as the standard errors and p values at a glance.  It's easier when we have a binary operator.  
+
+
+The first thing to notice is that the coefficients for "last_result_black=D" are very high.  Because they are high for both Black and White means that essentially it's saying that there is a very small chance of a draw if black's last game was a draw.  I have no idea why this would be the case, and it makes me wonder if I'm missing something structural about chess tournaments that is showing up in the data.  
+
+There are more confusing results, like the last_result_white ='W' having a negative coefficient. The thing to remember is that one result is always excluded, in this case 'B' for Bye.  So the white player having won their last match means their less likely to win this one "given the rest of the data" but only compared to them having a Bye in the last match. If they had a draw in their last round their probability of winning is even smaller.  The coefficient for "Loss" is very similiar, so it doesn't seem to matter if they won or lost, but it does matter if it was a draw or wasn't played at all.
+
+Most likely all of these things are not actual causative relationships. I know nothing about how these tournaments are run, but I imaginine the decisions for who plays who are not random and what goes into those decisions is showing up in the analysis.

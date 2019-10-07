@@ -1,0 +1,294 @@
+---
+title: "Data_607_Project_2_Part_1"
+author: "Steven Ellingson"
+date: "October 4, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I am pulling down data from USDA about the prices of fruits and vegetables.
+This data comes in an extremely messy format, with a spreadsheet for each fruit or vegetable.
+I pulled each spreadsheet down from the website and combined them into a dataset.
+I decided for this assignment to limit my analysis to the solid foods and leave the juice for another time.
+I analyzed the price by categories such as "dried, fresh, etc." while controlling for the specific item.
+
+Start by pulling HTML from website to get a list of the csv links.
+```{r, message=FALSE, warning=FALSE}
+
+library(rvest)
+library(stringr)
+library(readr)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+
+webpage <- read_html('https://www.ers.usda.gov/data-products/fruit-and-vegetable-prices/')
+webtable <- html_nodes(webpage, "table td")
+links <- paste0('https://www.ers.usda.gov/',unlist(str_extract_all(webtable,'webdocs.+csv')))
+unique_links <- unique(links)
+```
+
+I'm going to start with lists because they are a bit for flexible in terms of variable numbers of rows, etc.
+The spreasheets all have footnotes that give more detail.  I will store those for reference, but won't dig into them for this analysis.  
+I'm also going to store the individual headers for reference, but not keep them with the dataset.
+```{r, message=FALSE, warning=FALSE}
+price_list <- list() #This list will store the pricing data
+footnotes <- list()  #This will store the footnotes
+headers <- list()    #This will store the headers
+j = 1
+k = 1
+maxlength=0
+for (u in 1:length(unique_links)) {
+  fruit_data <- read_delim(unique_links[u],",")
+  
+  fruit_name = str_extract(unique_links[u],'/[^/]*\\.csv')
+  fruit_name = str_replace_all(str_replace_all(str_replace_all(fruit_name,'/',''),'.csv',''),'_',' ')
+  
+  #Pull out first two rows as header, and save in case we need them
+  header <- unname(apply(fruit_data, 2, function(x) paste(x[1],x[2])))
+  headers[[u]] = header
+  
+  fruit_data = fruit_data[-c(1,2),]
+
+  #loop through data set
+  for (i in 1:nrow(fruit_data)) {
+    row <- fruit_data[i,]
+    
+    if (sum(is.na(row)) == ncol(row)) {
+      #For completely blank rows - don't do anything
+    } else if(!is.na(unlist(str_extract(row[1],'^\\d+')))) {
+      #rows that start with a number are assumed to be footnotes. 
+      #Put them in their own list
+      footnotes[[j]] <- as.list(c(fruit_name,
+                          unlist(str_extract(row[1],'^\\d+')),
+                          unlist(str_replace(row[1],'^\\d+',''))
+                          ))
+      j = j+1
+    } else if(!is.na(unlist(str_extract(row[1],'^Source')))) {
+      #rows that start with a number are assumed to be footnotes. 
+      #Put them in their own list
+      footnotes[[j]] <- as.list(c(fruit_name,
+                                  'Source',
+                                  unlist(str_replace(row[1],'^Source: ',''))
+      ))
+      j = j+1
+    }else {
+      #The rest go into our price data list
+      price_list[[k]] <- c(fruit_name,unname(as.list(row)))
+      k = k+1
+      len = length(unname(as.list(row))) +1
+      if (len > maxlength) {
+        maxlength = len
+      }
+    }
+  }
+}
+
+
+```
+I now have my list of lists.  Since there are more columns in some of the lists, I will create a data frame with the maximum number of columns, and fill NA's for ones with fewer columns.
+
+```{r}
+
+price_data = data.frame(matrix(NA, nrow = 0, ncol = maxlength))
+
+for(r in 1:length(price_list)) {
+  row = price_list[[r]]
+  rowcount = length(row)
+  
+  while (rowcount < 10) {
+    row = c(row,NA)
+    rowcount = rowcount + 1
+  }
+  
+  row_df = as.data.frame(row)
+  
+  names(row_df) <- c('X1','X2','X3','X4','X5','X6','X7','X8','X9','X10')
+  
+  price_data = rbind(price_data, row_df)
+  
+}
+head(price_data)
+```
+I now have my data frame, with generic column names.  
+Column 9 and 10 look completely blank, let's make sure that's the case  
+```{r}
+nrow(price_data)
+sum(is.na(price_data[9]))
+sum(is.na(price_data[10]))
+```
+They are blank, let's remove  
+```{r}
+price_data <- price_data[-c(9,10)]
+```
+Next, let's remove the footnotes pointers  
+```{r}
+price_data['X2'] = apply(price_data,1, function(x) str_replace_all(x['X2'],'\\d*,*\\d+ *$',''))
+price_data = drop_na(price_data, 'X3')
+```
+Instead of dealing with separate units, I will separate into two datasets.  
+```{r}
+price_data_juice <- price_data %>%
+  filter(str_detect(X4,'pint'))
+
+price_data <- price_data %>%
+  filter(str_detect(X4,'pint')==FALSE)
+```
+From here on out I'm just going to work with the solid food dataset and leave the juice for another day.
+I believe columns 4 and 7 are just the names of the units.  Now that we have separated, these should be superfluous.  
+Check to make sure they are the same (pounds for solid food, fl oz for juice).  
+```{r}
+table(price_data[4])
+table(price_data[7])
+price_data = price_data[-c(4,7)]
+```
+Let's get rid of extra spaces and dollar signs, then convert the numeric data to numeric columns.  
+```{r}
+clean_up_data <- function(row) {
+  new_row = sapply(row, function(x) str_replace(str_trim(x),'\\$',''))
+  return(new_row)
+}
+
+price_data_2 = as.data.frame(apply(price_data, 2, clean_up_data))
+
+price_data_3 <- as.data.frame(lapply(price_data_2, function(col) {
+  if (suppressWarnings(all(!is.na(as.numeric(as.character(col)))))) {
+    as.numeric(as.character(col))
+  } else {
+    col
+  }
+}))
+head(price_data_3)
+```
+
+The intermediate columns are just to convert price "retail price"" to "price per cup".  We're looking at price and so can remove these.  Let's just check quick that there isn't some information here we'd be missing out on.  
+```{r}
+price_data_3['Check'] =  round(price_data_3['X3']*price_data_3['X6']/price_data_3['X5'],2)
+
+price_data_3[price_data_3['X8']!=price_data_3['Check'],]
+```
+You can see that the "check" column is just a combination with the other two columns. The 18 where they are different look like rounding errors.
+We are safe to remove these and just keep our prices.  
+```{r}
+price_data_4 = price_data_3[-c(4,5,7)]
+```
+Let's fix our column names and see how it looks.  
+```{r}
+names(price_data_4) = c('Food','Form','Retail_Price','Price_Per_Cup')
+str(price_data_4)
+sort(table(price_data_4['Form']),decreasing=T)
+```
+I think it would be best to take some of the specific labels and put them in to more broad categories for analysis.
+I'll add a new column for this so we can refer back to the given data.  
+I don't think there is any elegant way to do this, I'll need to just list out the new categories.  
+```{r}
+categorize = function(x){
+  switch(x,
+  'Packed in juice' = 'Packed',
+  'Packed in syrup or water' = 'Packed',
+  'Florets' = 'Fresh',
+  'Heads' = 'Fresh',
+  'Applesauce' = 'Other',
+  'Boiled' = 'Other',
+  'Canned, packed in syrup or water' = 'Packed',
+  'Cooked whole' = 'Other',
+  'Dried (Prunes)' = 'Dried',
+  'Fresh green cabbage' = 'Fresh',
+  'Fresh red cabbage' = 'Fresh',
+  'Fresh, consumed with peel' = 'Fresh',
+  'Fresh, peeled' = 'Other',
+  'Frozen french fries' = 'Frozen',
+  'Full Heads' = 'Fresh',
+  'Grape and cherry' = 'Fresh',
+  'Hearts' = 'Other',
+  'Large round' = 'Fresh',
+  'Packed in syrup, syrup discarded' = 'Packed',
+  'Raisins' = 'Dried',
+  'Raw' = 'Fresh',
+  'Raw baby' = 'Fresh',
+  'Raw whole' = 'Fresh',
+  'Roma and plum' = 'Fresh',
+  'Sauerkraut' = 'Other',
+  'Sliced' = 'Other',
+  'Sticks' = 'Other',
+  'Trimmed bunches' = 'Other',
+  'Whole' = 'Fresh',
+  x
+  )
+}
+
+price_data_4['Category'] = apply(price_data_4['Form'],1, categorize)
+table(price_data_4['Category'])
+boxplot(Price_Per_Cup ~ Category, data=price_data_4)
+```
+  
+    
+We are down to 6 categories, all with at least a few members.
+From the boxplot we can see that "Packed" appears the most expensive per cup.  
+Like the "airline delays" example, it's possible we could run into Simpson's Paradox here.
+Because there are so many different foods, pulling them together into one chart is tough to look at.  Instead I'll take all the two-way combinations, and then pull any fruit that has a record in both of those categories, and chart that.  
+```{r}
+
+compare_two = function(cat1,cat2) {
+  #find all foods that have an entry in BOTH lists
+  a <-filter(price_data_4,Category==cat1)['Food']
+  b<- filter(price_data_4,Category==cat2)['Food']
+  intersection = intersect(a,b)
+  intersect_list <- as.character(unlist(intersection[,1]))
+  intersect_rows = price_data_4[price_data_4$Food %in% intersect_list,]
+  intersect_rows = filter(intersect_rows, Category==cat1 | Category==cat2)
+  if (nrow(intersection) > 1) {
+  ggplot(filter(intersect_rows, str_detect(Food,'^[a-e].*')), aes(Food, Price_Per_Cup, fill=Category)) + 
+    geom_bar(position="dodge", stat="identity")
+  }
+}
+
+combinations <- as.data.frame(t(combn(unique(price_data_4$Category),2)))
+
+apply(combinations, 1, function(x) compare_two(x[1],x[2]))
+```
+
+There's a lot to unpack (no pun intended) here. It does look like Fresh is generally more costly than Frozen or Canned, and that Frozen is more costly than canned.  
+
+A simpler way to look at the relative effects is to throw both food and category into a linear model and look at the coefficients.  R will automatically turn our categorical variables into dummy variables.
+
+```{r}
+model <- glm(Price_Per_Cup ~Category + Food,data=price_data_4)
+summary(model)
+coef <- model$coefficients
+pvalues <- coef(summary(model))[,4]
+coef_cat <- coef[str_detect(names(coef),"Category.+")]
+```
+Since we're looking for the effects of the categoriesk I'll pull just the coefficients that point to our categories.  
+The model automatically removed Canned since it is a linear combination of the other categories. We can interpret this as having a coefficient of 0.
+```{r}
+list('Coefficients' = coef_cat,
+'P-values' = pvalues[str_detect(names(pvalues),"Category.+")])
+```
+
+Because Dried and Frozen have such high P-values, it's best to think of them as having no effect.
+The other three have P-values around 0.01-0.02, and so we can interpret the coefficient as their effect on pricing.
+I think "Fresh" is the best category to use as a baseline, so let's report the rest relative to Fresh.
+```{r}
+names(coef_cat) <- str_replace(names(coef_cat),'Category','')
+
+coef_cat = c(coef_cat,'Canned' = 0)
+coef_cat['Dried'] = 0
+coef_cat['Frozen'] = 0
+coef_cat = coef_cat - coef_cat['Fresh']
+sort(round(coef_cat,3))
+```
+
+Dried, Frozen and Canned are around 24 cents less per cup than fresh.
+Frozen and canned being less expensive than fresh matches with what we saw in the charts. It's interesting though that Frozen and Canned aren't shown to be any different, when every fruit that had a form in both frozen and canned had a higher price for frozen. The foods that had both were a fairly small sample, so it's not that surprising our chart of 5 foods doesn't match with the overall effect.  
+
+Packed (which includes packed in juice, packed in syrup, etc) is around 22 cents more per cup.   
+Other (which is a combination of lots of things) Are about 21 cents more per cup.  
+I wouldn't put much stock into that last one, since it was really just a catch-all.
+Reminder of which forms got put into "Other: 
+```{r}
+price_data_4['Form'][price_data_4['Category']=='Other']
+```

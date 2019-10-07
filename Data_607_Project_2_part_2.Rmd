@@ -1,0 +1,100 @@
+---
+title: "Data_607_Project_2_Part_2"
+author: "Steven Ellingson"
+date: "October 5, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+```
+This is a dataset of Airbnb Listings in New York:
+https://www.kaggle.com/dgomonov/new-york-city-airbnb-open-data  
+  
+The dataset looks pretty tidy - if you are looking at the individual listings.
+If you are looking at the hosts though, you have multiple rows per host, repeated data etc.
+So, for this assignment I made a tidy dataset of the hosts for analysis.  
+There is not a lot of data on the hosts, so I will just have the ID, name and I'll add a few aggregate columns for analysis.  
+I will look to see if the number of listings a host affects the number of reviews those listings get.
+
+```{r}
+listings <- read.csv('AB_NYC_2019.csv', stringsAsFactors = FALSE)
+head(listings)
+str(listings)
+
+
+```
+
+Let's check to make sure our host data is actually the same for all host IDs:
+```{r}
+c(count(unique(listings[c('host_id')])),
+count(unique(listings[c('host_id','host_name')])),
+count(unique(listings[c('host_id','calculated_host_listings_count')])))
+```
+That looks good. Let's create our hosts dataset
+```{r}
+#Fill 0 for the NA, I believe these can be interpreted as 0
+listings[is.na(listings['reviews_per_month']),'reviews_per_month'] <- 0
+
+listings <- group_by(listings,host_id,host_name,calculated_host_listings_count)
+
+hosts <-summarize(listings,avg_price = mean(price),count_listings= n(),avg_reviews_per_month = mean(reviews_per_month))
+
+head(hosts)
+
+```
+
+They had already calculated the listing count, let's see if our aggregate function matches.  
+
+```{r}
+sum(hosts$count_listings != hosts$calculated_host_listings_count)
+```
+They are equivalent, so let's remove one.  
+```{r}
+hosts <- subset(hosts, select=-c(calculated_host_listings_count))
+```
+
+Let's take a look at look at listing count.  The advantage of having a dataset grouped by hosts is that this variable makes more sense. You can compare how this variable looks on either dataset.  
+
+```{r}
+listing_counts <- as.data.frame(cbind(table(hosts$count_listings),
+table(listings$calculated_host_listings_count)))
+
+names(listing_counts) = c('by_host','by_listing')
+listing_counts
+```
+You can see the numbers get stranger as the count goes up.  The first dataset has 327 entries with the value "327", but that is just one host with 327 listings. Depending on what you're looking at, this may not really matter.  But, if you think the host is having a large effect on your response variable, it my skew your results to have one host show up in 327 responses.
+
+Let's check out the correlation between number of listings and avg. numbers of reviews.  It should be noted that I'm taking an average of an average here, and there is no way for me to weight this column, since the dataset doesn't tell me how long the listings have been listed. This is not great but will have to do for this analysis.
+
+```{r}
+ggplot(hosts, aes(x=count_listings, y=avg_reviews_per_month)) + geom_point() + geom_smooth(method="lm")
+```
+Hard to say exactly from the chart, but it does look like it has a positive correlation
+```{r}
+
+model = glm(data=hosts,avg_reviews_per_month ~ count_listings)
+summary(model)
+```
+
+And we see here that every extra listing a host has correlates with an extra review every 10 months. Out of curiosity, let's create the same model on the original listings dataset.  
+
+```{r}
+
+model2 = glm(data=listings,reviews_per_month ~ calculated_host_listings_count)
+summary(model2)
+
+```
+
+And now we have a negative coefficient. Why the discrepency?  I would hypothesize that some of the large values (remember our 327 listing host) could be skewing the results.  In our original dataset, that 327 shows up 327 times, so it could carry a lot of weight.  
+
+A probably more interesting question is, which conclusion is right? I would say they are both right, but they are answering a different question.  
+
+If you pull up two listings online, and see that one is the host's only listing, and the other is a "superhost" and has many properties, you would want to bet on the former as having more reviews.  (Though the coefficient is really small, so I wouldn't bet your life savings or anything.)   
+
+On the other hand, if you look at the hosts themselves of those properties, you'd want to place your bet on the "superhost" as having more reviews on average for all of their properties.
+
