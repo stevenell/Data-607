@@ -1,0 +1,138 @@
+---
+title: "Data 607 Assignment 5"
+author: "Steven Ellingson"
+date: "October 13, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I'm currently reading a book called Good Omens.  It is a fantasy book with a lot of religion involved.  Although I wouldn't call it my "favorite" genre, I decided to take this along with some similar books. The true tidy version of this data would have multiple dataframes for each, since we have lists (author, genre) that can have multiple values.  Since the assignment asked for 1 data frame per file, I'm going to put a delimited list as the value for these columns.
+
+We'll start by pulling the html page:
+```{r, message=FALSE, warning=FALSE}
+library(rvest)
+```
+```{r}
+data <- read_html('books.html')
+
+#There is only one table here
+table = html_nodes(data,'table')
+
+#separate head and body in table
+head = html_text(html_nodes(html_nodes(html_nodes(table,'thead'),'tr'),'th'))
+body = html_nodes(html_nodes(table,'tbody'),'tr')
+
+#use lapply to pull the row data
+rows = lapply(body, function(x) html_text(html_nodes(x,'td')))
+
+#rows is a list of lists, this should append them into a dataframe
+df_html = as.data.frame(do.call(rbind, rows))
+#take row names from header
+names(df_html) = head
+```
+
+Next, we'll pull the xml
+```{r, message=FALSE, warning=FALSE}
+library(XML)
+library(dplyr)
+```
+```{r}
+data <- xmlParse('books.xml')
+
+root <- xmlRoot(data)
+
+#This will pull the data into a list of lists
+bookList = xmlSApply(root, function(x) xmlSApply(x, xmlValue) )
+
+#Pull all unique first level tags.  These will be our column names
+head = unique(unlist(lapply(bookList,function(x) unlist(names(x)))))
+
+#Now I'm going to loop through the books to create our data frame
+df_xml = data.frame(matrix(ncol = length(head), nrow = 0))
+for(i in 1:length(bookList)) {
+  row = bookList[[i]]
+  newRow = list()
+  for (title in head) {
+    newRow[title] = paste(row[names(row) == title],collapse="|")
+  }
+  newRowDF = as.data.frame(newRow,stringsAsFactors = F)
+  df_xml = rbind(df_xml, newRowDF)
+}
+
+```
+
+Lastly, let's pull in the JSON file.  We'll use the same strategy as the XML = append duplicate columns together with |.
+
+```{r, message=FALSE, warning=FALSE}
+library(RJSONIO)
+```
+```{r}
+data = fromJSON(content = 'books.json')
+
+bookList = data[[1]][[1]]
+
+df_json = data.frame(matrix(ncol = length(head), nrow = 0))
+for(i in 1:length(bookList)) {
+  row = bookList[[i]]
+  newRow = list()
+  for (title in head) {
+    #newRow[title] = paste(row[names(row) == title],collapse = '|')
+    #newRow[title] = lapply(row[names(row) == title],function(x) paste(x,collapse='|'))
+    temp1 = row[names(row) == title]
+#    if (length(temp1) > 1) {
+      temp2 = temp1[[1]]
+ #   } else {
+#      temp2 = temp1
+#    }
+    newRow[title] = paste(lapply(temp2,function(x) paste(x,collapse=' ')),collapse = '|')
+  }
+  newRowDF = as.data.frame(newRow,stringsAsFactors = F)
+  df_json = rbind(df_json, newRowDF)
+}
+
+```
+OK, let's compare our three data frames to see if they are the same
+
+```{r}
+df_html
+df_xml
+df_json
+```
+
+Well, we have a few differences.  First, html has different names than the other two, since the names are there for a human viewing the table. Also, the authors names are not the same. The XMLSapply just concatenated them without spaces, while my function for the JSON file worked for the multiple author book, but put a pipe between the single author names.  Let's fix those
+
+```{r}
+library(stringr)
+
+#
+df_xml['author'] = sapply(df_xml['author'], function(x) str_replace_all(x,'([[:alpha:]])([A-Z])','\\1 \\2'))
+df_xml
+
+xml_author_fix = function(x) {
+  return(str_replace_all(x,'([[:alpha:]])([A-Z])','\\1 \\2'))
+}
+
+df_xml['author'] = sapply(sapply(df_xml['author'], xml_author_fix), xml_author_fix)
+
+json_author_fix = function(x) {
+  if(str_detect(x,' ')==F) {
+    x=str_replace_all(x,'|',' ')
+  }
+  return(x)
+}
+
+df_json['author'] = sapply(df_json['author'], json_author_fix)
+
+df_html
+df_xml
+df_json
+
+
+```
+
+Alright, we have the same data here, and the pipe separated lists can be parsed easily if needed.
+
+

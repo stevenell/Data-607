@@ -1,0 +1,47 @@
+{
+	"book_data": {
+		"book": [{
+				"title": "Good Omens: The Nice and Accurate Prophecies of Agnes Nutter, Witch",
+				"author": [{
+						"firstName": "Terry",
+						"lastName": "Pratchet"
+					}, {
+						"firstName": "Neil",
+						"lastName": "Gaiman"
+					}
+				],
+				"country": "United Kingdom",
+				"language": "English",
+				"genre": ["Horror", "Fantasy", "Comedy"],
+				"publisher": ["Gollancz", "Workman"],
+				"publicationDate": "5\/1\/1990",
+				"pages": "288"
+			}, {
+				"title": "Towing Jehovah",
+				"author": {
+					"firstName": "James",
+					"middleName": "K",
+					"lastName": "Morrow"
+				},
+				"country": "United States",
+				"language": "English",
+				"genre": ["Fantasy", "Science Fiction", "Religion"],
+				"pages": "371",
+				"publicationDate": "4\/24\/1995",
+				"publisher": "Harcourt, Inc."
+			}, {
+				"title": "Hyperion",
+				"author": {
+					"firstName": "Dan",
+					"lastName": "Simmons"
+				},
+				"country": "United States",
+				"language": "English",
+				"genre": ["Science fiction", "Fantasy"],
+				"publisher": "Doubleday",
+				"publicationDate": "3\/25\/1989",
+				"pages": "482"
+			}
+		]
+	}
+}

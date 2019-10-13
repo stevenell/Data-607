@@ -1,0 +1,53 @@
+<?xml version="1.0"?> 
+<book_data>  
+	<book>
+		<title>Good Omens: The Nice and Accurate Prophecies of Agnes Nutter, Witch</title>
+		<author>
+			<firstName>Terry</firstName>
+			<lastName>Pratchet</lastName>
+		</author>
+		<author>
+			<firstName>Neil</firstName>
+			<lastName>Gaiman</lastName>
+		</author>  
+		<country>United Kingdom</country>
+		<language>English</language>
+		<genre>Horror</genre>
+		<genre>Fantasy</genre>
+		<genre>Comedy</genre>
+		<publisher>Gollancz</publisher>
+		<publisher>Workman</publisher>
+		<publicationDate>5/1/1990</publicationDate>
+		<pages>288</pages>
+	</book>
+	<book>
+		<title>Towing Jehovah</title>
+		<author>
+			<firstName>James</firstName>
+			<middleName>K</middleName>
+			<lastName>Morrow</lastName>
+		</author>
+		<language>English</language>
+		<country>United States</country>
+		<genre>Fantasy</genre>
+		<genre>Science Fiction</genre>
+		<genre>Religion</genre>
+		<pages>371</pages>
+		<publicationDate>4/24/1995</publicationDate>
+		<publisher>Harcourt, Inc.</publisher>
+	</book>
+	<book>
+		<title>Hyperion</title>
+		<author>
+			<firstName>Dan</firstName>
+			<lastName>Simmons</lastName>
+		</author>
+		<country>United States</country>
+		<language>English</language>
+		<genre>Science fiction</genre>
+		<genre>Fantasy</genre>
+		<publisher>Doubleday</publisher>
+		<publicationDate>3/25/1989</publicationDate>
+		<pages>482</pages>
+	</book>
+</book_data>
