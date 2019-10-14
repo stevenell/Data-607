@@ -1,0 +1,55 @@
+---
+title: "Data_607_Soft_Skills_Reference"
+author: "Steven Ellingson"
+date: "October 14, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The idea here is to pull a list of soft-skills so that we can identify when we see one in the indeed data scrape. I took a couple of top google results and scraped them into one list: "https://www.developgoodhabits.com/soft-skills-list/" "https://training.simplicable.com/training/new/87-soft-skills"
+
+```{r}
+
+library(xml2)
+library(rvest)
+library(stringr)
+full_df <- data.frame()
+
+# Get list from "developgoodhabits.com"
+url <- "https://www.developgoodhabits.com/soft-skills-list/"
+page <- xml2::read_html(url)
+
+skills <-page %>%
+  html_nodes('body') %>%
+  html_nodes( 'div') %>%
+  html_nodes(".wrp.cnt") %>%
+  html_nodes( 'h3') %>%
+  html_text() %>%
+  str_replace_all('^\\d+\\.? *','')
+skills
+```
+Get list from "https://training.simplicable.com"
+
+```{r}
+url2 <- "https://training.simplicable.com/training/new/87-soft-skills"
+page2 <- xml2::read_html(url2)
+
+skills2.temp <- html_nodes(page2,'.blogy')[1] %>%
+  html_text() %>%
+  str_split(fixed('\r')) %>%
+  unlist()
+
+skills2 <- skills2.temp[str_detect(skills2.temp,'\\d\\.')] %>%
+str_replace_all('^.*\\d+\\.? *','')
+
+#add to other list, and only pull unique values
+skills <-sort(unique(str_trim(c(skills,skills2))))
+
+skills
+write.csv(skills, 'generic_skill_list.csv')
+
+
+```
