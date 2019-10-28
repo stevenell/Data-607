@@ -1,0 +1,200 @@
+---
+title: "Data-607-Week-9"
+author: "Steven Ellingson"
+date: "10/27/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+For this assignment, I decided to take all of my personal ratings from rottentomatoes.com, and pull any New York Times reviews for those ratings.  
+
+First, I will be pulling my personal ratings from rotten tomatoes.  Because it has an infinite scrolling page, I will use RSelenium to scroll to the the bottom of the page.
+
+```{r}
+library(RSelenium)
+library(rvest)
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r, eval=FALSE}
+#This is the URL to my ratings. Rotten Tomatoes ratings are public, so I don't need to worry about loging in.
+url <- "https://www.rottentomatoes.com/user/id/905861815/ratings"
+
+#Open up Chrome Driver.  Because I'm not using a Docker container, YMMV here.
+driver<- rsDriver()
+remDr <- driver[["client"]]
+remDr$navigate(url)
+
+#scroll down 100 times, waiting for the page to load at each time
+#In the future I should make this smarter - scroll to end instead of just a certain number of times.
+for(i in 1:100){      
+  remDr$executeScript(paste("scroll(0,",i*10000,");"))
+  Sys.sleep(3)    
+}
+```
+
+I'm going to pull just the titles and the ratings. In order to calculate the ratings, I count the number of "filled" stars, and the number of "half" stars.
+````{r, eval=FALSE}
+
+titleElem <- remDr$findElements(using = "class", value = "ratings__user-rating-title")
+ratingElem <- remDr$findElements(using = "class", value = "star-display")
+
+#Get the title for all using getElementAttribute
+title <- unlist(lapply(titleElem, function(x) {x$getElementAttribute('title')}))
+
+#Start rating will need this helper function to count the stars and half-stars
+getStars = function(elem) {
+  filledStarsList = elem$findChildElements(using = "class", value = "star-display__filled")
+  filledStars <- length(unlist(lapply(filledStarsList, function(x) {x$getElementText()})))
+  
+  halfStarsList = elem$findChildElements(using = "class", value = "star-display__half")
+  halfStars <- unlist(length(unlist(lapply(halfStarsList, function(x) {x$getElementText()}))))
+  
+  stars = filledStars + (halfStars*.5)
+  return(stars)
+}
+
+#Apply function of rating elements
+rating <- unlist(lapply(ratingElem, getStars))
+
+#combind into 1 data frame
+df = cbind(title,rating)
+
+head(df)
+
+#Save this dataframe since the above takes so long, I don't want to do any more than I have to.
+write.csv(df,'rotten_tomatoes_ratings.csv',row.names = FALSE)
+
+```
+
+
+Now I'm going to use the New York Times API to attempt to get the reviews for these movies. This could definitely use some improvement - I'm not cleaning up titles, and i'm just assuming that the first result is the right one.  
+
+In order for this to work, you'll need to set the "apiKey" constant to your api key.
+
+```{r, include=FALSE}
+apiKey = 'RvUd6JkD5TqEvKIbpSDqkyTRXUWWGoeU'
+```
+
+```{r, eval=FALSE}
+
+#This function will take a row from my dataframe and return a vector with the NYT data appended
+getReview = function(row) {
+  #Need to sleep for 6 seconds to keep under rate limit
+  Sys.sleep(6)
+  
+  #get title and URL endcode
+  titleEncoded = URLencode(row['title'],reserved = TRUE)
+  url = paste0('https://api.nytimes.com/svc/movies/v2/reviews/search.json?query=',titleEncoded,'&api-key=',apiKey)
+  result <- GET(url)
+  warn_for_status(result)
+  first_result = NULL
+  resultList = fromJSON( content(result,'text'))
+  
+  #Get the first result, and unlist into a named vector
+  if(resultList$num_results > 0) {
+    first_result = unlist(resultList$results[1,])
+  }  
+  #Add the number of results to the vector, so movies with extra results could be examined later.
+  first_result['num_results'] = resultList$num_results
+  first_result['rt_title']  = row['title']
+  first_result['my_rating']  = row['rating']
+  
+  return(first_result)
+    
+}
+
+reviewList = apply(df,1,getReview)
+
+
+#We now have a list of vectors.  Unfortunately they don't all have the same fields, so I'll loop through here to get the list of fields
+names = NULL
+
+for (i in 1:length(reviewList)) {
+  names = c(names,names(reviewList[[i]]))
+}
+
+names = unique(names)
+names = names[names!=""]
+
+#Create a new dataframe with our field list
+dfnew <- as.data.frame(matrix(,ncol=length(names),nrow=0))
+names(dfnew)<-names
+
+#Now I'll loop through our list of vectors to create the final datafame
+for(i in 1:length(reviewList)){
+  row = reviewList[[i]]
+  newRow = NULL
+  for(name in names){
+    newRow[name] = row[name]
+  }
+  dfnew = rbind(dfnew,as.data.frame(t(newRow)))
+}
+
+head(dfnew)
+
+write.csv(dfnew,'rotten_tomatoes_ratings_with_nyt.csv',row.names = FALSE)
+
+```
+
+```{r, include = FALSE}
+dfnew = read.csv('rotten_tomatoes_ratings_with_nyt.csv')
+```
+
+OK, so we now that we have a dataframe, let's do some exploration to see how my ratings relate to NYT.
+
+First, let's see if my rating relates to whether or not we found a review at all.
+
+```{r}
+
+dfnew$my_rating <- as.numeric(as.character(dfnew$my_rating))
+dfnew$critics_pick<- as.numeric(as.character(dfnew$critics_pick))
+
+grouped_df = group_by(dfnew,my_rating)
+
+rating_summary = summarise(
+  grouped_df,
+  count = n(),
+  missingCount = sum(is.na(display_title)),
+  AvgMissing = mean(is.na(display_title))
+)
+
+
+#display sorted summary
+rating_summary[order(rating_summary$my_rating),]
+
+
+ggplot(data=rating_summary, aes(x=my_rating, y=AvgMissing))+
+  geom_bar(stat="identity")
+
+```    
+  
+Hard to say for sure if there is anything of note here, but it does look like the higher I rated a movie, the more likely it is to have a NYT review.  
+
+Next, we can see if my rating correlates to the "critics_pick" flag:  
+
+```{r}
+rating_summary_2 = summarise(
+  grouped_df,
+  count = n(),
+  missingCount = sum(is.na(display_title)),
+  pickAverage = mean(critics_pick, na.rm = TRUE)
+)
+
+#display sorted summary
+rating_summary_2[order(rating_summary_2$my_rating),]
+
+
+ggplot(data=rating_summary_2, aes(x=my_rating, y=pickAverage))+
+  geom_bar(stat="identity")
+
+```  
+
+It does appear that there is a strong correlation here. Clearly the NYT critics and I see eye to eye!
+
