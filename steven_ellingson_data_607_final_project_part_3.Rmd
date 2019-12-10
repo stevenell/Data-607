@@ -1,0 +1,219 @@
+---
+title: "DATA 607 Final Project Part 3"
+author: "Steven Ellingson"
+date: "December 6, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In part 1 and 2, we pulled together data from a series of csv's and scraped betting lines from a website.  We now have the data necessary to build the model for predicting NBA win outcomes based on game state. All of this information is now sitting in our tidy database and we can pull it back out to create the model.
+```{r, message=FALSE,warning=FALSE}
+library(tidyverse)
+library(rvest)
+library(RMySQL)
+library(GGally)
+library(gridExtra)
+library(xtable)
+set.seed = 345
+```
+Redacted code:  con = dbConnect(dbDriver("MySQL"), user='root', password='PASSWORD', dbname='cuny', host='127.0.0.1',port = 3306)
+
+
+I'm going to query just the information I need for this model. We will keep the play ID so we can always look up more information from the database if needed.I will do some adjustments in the SQL statement:
+Remaining time is the remaining time in the period, but I just want remaining time in the whole game.  
+One thing that's interesting here is this isn't necessarily the actual remaining time - if the game ends up tied it goes into overtime and more time is added. It's essentially the "expected" remaining time at the time of this play. So a game could have two distinct points in time with two different scores that have the same "remaining time".  If I instead calculated the "actual" remaining time, the model would be useless, since whenever we would want to calculate this for a game in progress, we obviously wouldn't already know if the game will go into overtime or not.
+```{r}
+query <- "
+select p.id,case when g.home_score > g.away_score then 1 else 0 end as home_team_won,
+home_team_Vegas_line as line,p.home_score,p.away_score,
+case when period > 4 then 1 else 0 end as overtime,
+(720 * (case when period > 4 then 0 else 4-period end) ) + remaining_time as remaining_time
+from nba_games g
+inner join nba_plays p on p.game_id = g.id
+  where data_set like '%Regular%'
+and (remaining_time > 0 OR period < 4)
+and (remaining_time < 720 OR period > 1)
+group by g.id,p.home_score,p.away_score,p.period,p.remaining_time
+  "
+
+res <- dbSendQuery(con,query)
+
+df <- dbFetch(res, n=-1)
+
+head(df)
+
+```
+We'll create a couple of smaller versions of the dataset for the data exploration sections.
+```{r}
+small.df = sample_frac(df, 0.1)
+very.small.df = sample_frac(small.df,0.1)
+```
+
+
+```{r}
+ggpairs(select(very.small.df,home_team_won,line,home_score,away_score,remaining_time))
+```  
+
+Home Score correlates strongly with away score, and negatively with remaining time.  The "line" has a strong positive correlation with our target as we expected based on the last part.  The interesting thing is the other three variables don't have very strong associations.  This makes sense as well though, as what we'd expect to count is the *difference* between the home and away scores, not the scores themselves.I didn't put that variable in the model since it is just a linear combination of the other two variables, which we can't have if we're going to do linear regression.  That being said I think it would be more intuitive to see this margin, so we'll add it to our dataset and instead remove away_score.
+
+```{r}
+very.small.df$margin = very.small.df$home_score - very.small.df$away_score
+small.df$margin = small.df$home_score - small.df$away_score
+df$margin = df$home_score - df$away_score
+
+very.small.df = select(very.small.df, -away_score)
+small.df = select(small.df, -away_score)
+df = select(df, -away_score)
+
+
+ggpairs(select(very.small.df,home_team_won,line,margin,remaining_time))
+
+```  
+
+The new variable "margin" has a very strong correlation with winning, as expected. It's even more predictive than the "line" variable is.
+
+One thing I was hoping to explore with this project is how predictive these two variables are of the outcome as the game proceeds.  Here we'll plot them over time, using color to differentiate wins and losses. I will reverse the sign on "remaining_time" so that it reads left to right.  
+```{r}
+
+plot1 = ggplot(very.small.df, aes(y=margin, x = remaining_time*-1, color=home_team_won)) +
+  geom_point() +
+  ylim(-30,30)
+
+
+plot2 = ggplot(very.small.df, aes(y=line, x = remaining_time*-1, color=home_team_won)) +
+  geom_point() +
+  ylim(-30,30)
+
+grid.arrange(plot1,plot2,nrow=2)
+```  
+
+The shape of the "margin" is interesting. As the game proceeds, the margin spreads out, as there is a greater range of values. The higher the margin the more likely it is that the home team wins. The "line" doesn't have this shape, as it stays the same the whole game. 
+
+For both, we see a lot more wins at the top, as expected. One thing that might be misleading about the "line" plot is that it seems that, even at the very end of the game, the line is very predictive of winning. In reality what's most likely happening is the team that is predicted to win is more often ahead at that point in the game. Once the score of the game is taken into account, I'd expect that line to stop being a good predictor of winning later in the game. In order to see if I'm right about this, let's build a simple model without "line", then plot the residuals (model error) against it.
+
+```{r, results = 'asis'}
+margin.lm = glm(home_team_won ~ margin*remaining_time, data = small.df, family = binomial(link="logit"))
+print(xtable(margin.lm,digits=c(-4,-4,4,3,5)), comment=FALSE, floating=FALSE, type='html')
+```  
+
+The first coefficient matches our expectations - the margin has a strong positive correlation with winning.  The second is strange. It doesn't make any sense that a team is more likely to win a game earlier than they are later. I think it is easier to explain the last two  as working together to increase the effect of margin as the game goes on. You can think of the remaining_time coefficient as increasing or decreasing the intercept, and the interaction coefficient as increasing or decreasing the slope for margin as the game goes on. You can plug some numbers for remaining time and simplify to see how it affects the model:
+
+**Remaining Time = 2700 (A few minutes into the game)** 
+yhat = 0.1603 + 0.2854\*margin + 0.00008382\*time + -0.0000879\*margin\*time  
+yhat = 0.1603 + 0.2854\*margin + 0.00008382\*2700 + -0.0000879\*margin\*2700  
+yhat = **0.3866** + **0.04807**\*margin  
+**Remaining Time = 1440 halfway through the game**  
+yhat = 0.1603 + 0.2854\*margin + 0.00008382\*time + -0.0000879\*margin\*time  
+yhat = 0.1603 + 0.2854\*margin + 0.00008382\*1440 + -0.0000879\*margin\*1440  
+yhat = **0.281** + **0.1588**\*margin  
+**Remaining Time = 10 (almost the end of game):**  
+yhat = 0.1603 + 0.2854\*margin + 0.00008382\*time + -0.0000879\*margin\*time  
+yhat = 0.1603 + 0.2854\*margin + 0.00008382\*10 + -0.0000879\*margin\*10  
+yhat = **0.1611** + **0.2845**\*margin  
+
+You can see that as the game goes on, the slope of margin increases and the intercept gets closer to zero (50% probability).
+
+```{r, warning=FALSE, message=FALSE}
+small.df$resid = small.df$home_team_won-margin.lm$fitted.values
+small.df$grouped.time = floor(small.df$remaining_time/180)*180*-1
+small.df$grouped.line = floor(small.df$line/2)*2
+
+resid.summary = summarize(group_by(small.df,grouped.time,grouped.line),avgResid=mean(resid), n = n())
+
+ggplot(resid.summary[resid.summary$n > 20,], aes(y=grouped.line, x = grouped.time, fill=avgResid)) +
+  geom_raster(aes(fill=avgResid), interpolate=TRUE) +
+  ylim(-12,12)
+```  
+
+This plot is a little hard to understand, but the main idea is that early in the game (left side of plot) there is a correlation between the residual (how much our current model is off) and the line. Once we get halfway through the game though, it's really hard to see that correlation anymore.  It's a bit darker on the bottom but much less distinct. By the end you can't see any difference. This is exactly what was expected. The Vegas line works great as a "prior", but because irrelevant as compared to the scoring margin as we get further into the game.  
+
+OK, so let's create a model with line and the other variables added.  We'll add an interaction term for line/time remaining to account for the effect above. I'll add in an interaction for margin/line as well as there could be an interaction there.
+
+One thing to note is that the rows in this dataset are NOT independent, as we have many that all belong to one game, and thus one outcome. Because of this we should be a bit wary of any inferences we get from this model, but I believe it is fine for our purposes.
+
+We'll start by splitting our data into a training and test set, then create the regression model.
+
+```{r, results = 'asis'}
+df.train = sample_frac(df, 0.7)
+df.test = anti_join(df, df.train, by = 'id')
+
+
+lm = glm(home_team_won ~ line + home_score + margin + remaining_time + overtime + margin:remaining_time + line:remaining_time + margin:line, data = df.train, family = binomial(link="logit"))
+print(xtable(lm,digits=c(-4,-4,4,3,5)), comment=FALSE, floating=FALSE, type='html')
+```  
+  
+All of the variables here appear to be significant, including the interaction terms. The margin, remaining_time, and margin/time interaction term all have similar coefficients as before.  The line has a positive correlation, as expected, and  its interaction term with time has the opposite sign as margin's.  This makes sense as this interaction term is lessening line's impact as the game goes on, while margin's is increasing in impact.  
+
+Here is a plot of the effect of "margin" and line over time. All I'm doing to create this is to plug in a value for "remaining_time", then seeing what the new coefficients for "line" and "margin" will be.  
+
+```{r echo=FALSE, warning = FALSE, message = FALSE}
+
+df$margin.coef = lm$coefficients['margin:remaining_time']*df$remaining_time + lm$coefficients['margin']
+df$line.coef = lm$coefficients['line:remaining_time']*df$remaining_time + lm$coefficients['line']
+
+ggplot(df) +
+  geom_point(aes(y=margin.coef, x = remaining_time*-1, color = 'Margin Coefficient')) +
+  geom_point(aes(y=line.coef, x = remaining_time*-1, color = 'Line Coefficient')) +
+  xlab('Effective Coefficient')
+
+```
+
+The point in which these two lines cross is just before halfway through the game. This is the point in which "line" starts to have a smaller coefficient than "margin". This creates a really nice and easy to remember rule of thumb. The "Line" has a larger effect in the first half, the "Margin" in the second. If your team was expected to win by 5, but is behind by 5, you would still expect them to come back and win if it's in the first half of the game, but you wouldn't expect that if it's in the second half.
+
+The last term, has a positive coefficient.  This means that that the margin has a larger effect in games where the line is further from zero.  This is a pretty small effect though.  If you have a line of 10 (which is pretty large), the interaction term would be 0.00712.  This would only increase margin's slope from 0.2782 to 0.285.  
+
+Interesting that "overtime" shows up as significant and with a negative correlation.  This means that given a specific situation the home team is a bit less likely to win if that situation takes place in an overtime period. 
+
+Let's split the predicted values into 50 evenly-sized buckets to see how well the model performs.
+```{r}
+
+df.test$predicted.values = predict.glm(lm, newdata = df.test,type = "response")
+
+df.test$group.predicted <- cut_number(df.test$predicted.values, 50)
+resid.summary = summarize(group_by(df.test,group.predicted),
+                          mean_predict = mean(predicted.values),
+                          mean_win=mean(home_team_won), n = n())
+
+ggplot(resid.summary, aes(y=mean_predict, x = mean_win))  +
+  geom_point() + 
+  xlab('Actual Win Percentage') +
+  ylab('Mean Predicted Value') +
+  ggtitle('Expected vs. Observed Values for 10 Evenly Sized Buckets') + 
+  geom_abline(intercept = 0, slope = 1)
+
+```
+Overall, our model looks great. It predicts accurately overall for each bucket.
+
+Just to see if the model has some biases we're missing, let's remake the plots from above and take a look at them with our new model on the test set.  
+```{r, warning = FALSE, message=FALSE}
+df.test$predicted.values = predict.glm(lm, newdata = df.test,type = "response")
+df.test$resid = df.test$home_team_won - df.test$predicted.values
+df.test$grouped.time = floor(df.test$remaining_time/180)*180*-1
+df.test$grouped.line = floor(df.test$line/2)*2
+df.test$grouped.margin = floor(df.test$margin/3)*3
+
+resid.summary.line = summarize(group_by(df.test,grouped.time,grouped.line),avgResid=mean(resid), n = n())
+
+resid.summary.margin = summarize(group_by(df.test,grouped.time,grouped.margin),avgResid=mean(resid), n = n())
+
+
+plot1 = ggplot(resid.summary.line, aes(y=grouped.line, x = grouped.time, fill=avgResid)) +
+  geom_raster(aes(fill=avgResid), interpolate=TRUE) +
+  ylim(-16,16)
+            
+plot2 = ggplot(resid.summary.margin, aes(y=grouped.margin, x = grouped.time, fill=avgResid)) +
+  geom_raster(aes(fill=avgResid), interpolate=TRUE) +
+  ylim(-16,16)
+
+
+grid.arrange(plot1, plot2, nrow=2)
+```  
+
+The margin has some distinct patterns in the residuals. The darker areas represent time when the team won less often than the model predicted. About 2/3 through the game there is a dark spot above zero, and lighter spot below.  Then toward the end of the game those switch.  So in that inner section, the model is predicting the team that's ahead to win too often, and at the end they are predicting not often enough.  
+
+So we have our model, which is explainable and easy to calculate.  On the other hand, looking at the residuals I don't know that the methodology here is getting us the most accurate model.  It possible some other methodology (gradient boosting, neural network, etc.) could get us a more accurate model, while sacrificing some of that explainability.  
+
+It would also be interesting to try to add more variables, as there is a lot of data that we are not looking at.

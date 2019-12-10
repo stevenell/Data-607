@@ -1,0 +1,134 @@
+---
+title: "DATA 607 Final Project Part 2"
+author: "Steven Ellingson"
+date: "December 5, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+In the first part of this project, we created a Database of NBA plays through a series of CSVs.  In this second Part, I will scrape data from a sports betting website to add to this database.
+
+The website in question is sportsdatabase.com, and the single field I'm after is the Vegas line - over/under value for each game.Over/unders represent a number of points, with a negative value meaning the team is more likely to win. Since this project isn't about betting on sports and negative being better is counterintuitive, I'm going to reverse that by pulling the away team's line and inserting into the home team field.  The line for the away team is always the inverse of the line for the home team, so I just need to pull the one.
+
+```{r, warning=FALSE,message=FALSE}
+library(tidyverse)
+library(rvest)
+library(RMySQL)
+```
+
+Redacted code:  con = dbConnect(dbDriver("MySQL"), user='root', password='PASSWORD', dbname='cuny', host='127.0.0.1',port = 3306)
+
+This website is pretty cool in that you can query pretty specific information. Our query is pretty easy  - we just want every regular season game for the 2004-2018 seasons.
+```{r}
+
+url = "https://sportsdatabase.com/nba/query?output=default&sdql=date%2C+team%2C+o%3Ateam%2C+line+%40season%3E%3D2004+and+site%3Daway+and+playoffs%3D0+and+season%3C2019&submit=++S+D+Q+L+%21++"
+
+data <- read_html(url)
+
+table_node = html_nodes(data, "#DT_Table")
+
+table = html_table(table_node)
+
+vegas.df = table[[1]]
+head(vegas.df)
+
+```
+
+Let's update the date column to match the format we use in the other dataset
+```{r}
+vegas.df = mutate(vegas.df,date = paste0(substring(date,1,4),'-',substring(date,5,6),'-',substring(date,7,8)))
+```
+
+Now let's pull the game data from the database. We'll pull in all regular season games. I decided to just use regular season games for this project, but it would be interesting to add them in, and possibly just add a binary variable indicating if the game is a playoff game.
+```{r}
+query <- "select nba_games.id,data_set,date,home_team,away_team,home_score,away_score,
+periods,hm.sports_database_name as home_db_name,aw.sports_database_name as away_db_name from nba_games
+  left join nba_teams hm on home_team = hm.short_code
+  left join nba_teams aw on away_team = aw.short_code
+  where data_set like '%Regular%'
+  "
+
+res <- dbSendQuery(con,query)
+
+game.df <- dbFetch(res, n=-1)
+
+head(game.df)
+```
+
+Let's start by doing a "full join" and seeing what's missing on either end. Since I pulled the "away" line, the "o:team" will be the home team
+
+```{r}
+
+joined.df = full_join(vegas.df,game.df, c('date'='date','o:team' = 'home_db_name', 'team' = 'away_db_name'))
+
+sum(is.na(joined.df$team))
+
+```
+
+There were no missing values from the Vegas data frame. Let's see if there were some extra games that weren't in the original dataset. 
+It says right in the FAQ for the dataset that there were around 47 missing games, so we should expect around that many missing.
+
+```{r}
+
+sum(is.na(joined.df$id))
+```
+
+Looks like there are 42 missing. I assume 5 of the missing games were playoff games, which is why we only have 42 missing.  Either way we'll just remove these 42 and move on.
+```{r}
+joined.df = filter(joined.df, !is.na(id))
+str(joined.df)
+```
+
+Let's tidy this dataset a bit.  We don't need the spelled out names since we have the 3 letter codes.
+The data set is also doesn't give any interesting information since you could figure out what season it was by the date, and we already excluded playoff games.
+```{r}
+df = select(joined.df,id,date,home_team,away_team,home_score,away_score,periods,line)
+head(df)
+```
+
+Let's update the nba_games table with the Vegas line. You can't run 18K updates in one statement, but you can do an insert with an "on duplicate key update" clause.  This will just update the value (home_team_vegas_line) when it finds a duplicate key.  Since these keys were just pulled out of this table they should all be updates.
+
+```{r}
+query <- paste0("insert into nba_games (id,home_team_vegas_line) values ",
+     paste0(paste0("(",df$id,",",df$line,")"),collapse=", "),
+     " ON DUPLICATE KEY UPDATE home_team_vegas_line = VALUES(home_team_vegas_line)")
+             
+                
+res <- dbSendQuery(con,query)
+```
+
+Let's see if they all updated.
+```{r}
+query <- paste0("select count(*) from nba_games where data_Set like '%Regular%' and home_team_vegas_line is null")
+res <- dbSendQuery(con,query)
+missing.count <- dbFetch(res, n=-1)
+missing.count
+```
+
+Looks like they're all there.  Now to verify we did this right, we would expect there to be a strong correlation between the score margin (home_team_score - away_team_score) and this line.
+
+```{r, warning=FALSE, message=FALSE}
+df$margin = df$home_score - df$away_score
+df$total_score = df$home_score + df$away_score
+
+ggplot(df, aes(y = margin, x =line, color=(total_score))) +
+  geom_point(size = 0.1, stroke = 0, shape = 16) + 
+  geom_jitter() +
+  geom_smooth(method="lm", color="darkred", fill = "pink", level = 0.99) +
+  xlim(-40,40) +
+  ylim(-40,40)
+
+
+lm = lm(margin ~ line, data = df)
+summary(lm)
+
+```
+
+As you can see, these sportsbooks are pretty good at setting these lines. The slope of the line is very close to 1, with the intercept close to zero.
+
+The odd looking cross shape comes from the fact that you can't end in a tie. So "margin" is never zero. Because the margin cannot be zero, the line is never set to -0.5 or 0.5.  
+
+For part three of this project, I will pull in play-by-play data and attempt to make a model that predicts the outcome of the game at any point, using this line as a starting point.
+

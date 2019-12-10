@@ -1,0 +1,152 @@
+---
+title: "DATA 607 Final Project Part 1"
+author: "Steven Ellingson"
+date: "December 8, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+When watching a sporting event of any kind, there's often points in the game that the outcome seems determined. One team is ahead by too many points to overcome in the time remaining in the game.  I always wonder at these moments, exactly how unlikely is it? If I'm at home, I wonder if I should move on to doing something else. If I'm attending the game live, I wonder if it's time to try to beat the traffic rush.
+
+The goal of this project is to use NBA play by play data to output a probability of a specific team winning the game at any specific time. I'm specifically focusing on the basics: the score and the time remaining in the game.  I also will pull in a "prior" win probability - who was expected to win before the game started? I believe the best source of that data comes from the people who hope to make money betting on these games.  The "Vegas line" is a consensus line that is established based on all of the bets that individuals are making.  
+
+The play-by-play data was helpfully scraped and put into csvs by https://www.nbastuffer.com/.  The challenge here is that there are 1300 games per year, and I am looking at 10 years of data, so that means 13000 csvs to be read into the database. I decided to use R to loop through and insert these into the database.
+
+For the Vegas line, I scraped data from a very helpful website: www.sportsdatabase.com.  
+
+This project will be broken into three parts. This part will focus on inserting the play-by-play data into the database.  The second will scrape the Vegas line and insert that.  I will do a bit of data exploration of that line as well.  The third part will be pulling our data out of the database and creating our model.
+
+```{r, warning=FALSE,message=FALSE}
+library(tidyverse)
+library(RMySQL)
+```
+
+Connect to local database.
+Redacted code:  con = dbConnect(dbDriver("MySQL"), user='root', password='PASSWORD', dbname='cuny', host='127.0.0.1',port = 3306)
+
+In order to keep everything in one place, I will put the SQL Table creation here. 
+
+```{r}
+dbSendQuery(con, 'Drop table if exists nba_games')
+dbSendQuery(con, 'Drop table if exists nba_plays')
+dbSendQuery(con, 'Drop table if exists nba_teams')
+
+dbSendQuery(con, 'create table nba_games (id int primary key, data_set varchar(100), date date, home_team varchar(100), away_team varchar(100), home_score int, away_score int, periods int, home_team_vegas_line decimal(14,4) )')
+dbSendQuery(con, 'create table nba_plays ( id int primary key auto_increment, game_id int, a1 varchar(100), a2 varchar(100), a3 varchar(100), a4 varchar(100), a5 varchar(100), h1 varchar(100), h2 varchar(100), h3 varchar(100), h4 varchar(100), h5 varchar(100), period int, away_score int, home_score int, remaining_time int, elapsed int, play_length int, play_id int, team varchar(100), event_type varchar(100), assist varchar(100), away varchar(100), home varchar(100), block varchar(100), sub_entered varchar(100), sub_left varchar(100), num int, opponent varchar(100), outof int, player varchar(100), points int, possession varchar(100), reason varchar(100), result varchar(100), steal varchar(100), type varchar(100), shot_distance int, original_x int, original_y int, converted_x int, converted_y int, description varchar(255) )')
+
+dbSendQuery(con, 'create table nba_teams (id int primary key auto_increment, short_code varchar(100), sports_database_name varchar(100) )')
+
+```
+
+Instead of using a for loop to go through all these files, I will create a function and use R's "apply " syntax.
+
+This function will convert time to seconds, including the negative sign at period starts
+Since these aren't actual times of day, but lengths of time, I think this makes more sense.
+"Play Length" is negative at the start of periods, but the "-" is in the wrong place.
+```{r}
+time_convert = function(string) {
+  neg = 1
+  if(str_detect(string,'-')) {
+    neg = -1
+    string = str_replace_all(string,'-','')
+  }
+    
+  pieces = as.integer(unlist(str_split(string,':')))
+  seconds = (pieces[[1]]*60*60 + pieces[[2]]*60 + pieces[[3]]) * neg
+  
+  return(seconds)
+}
+```
+This function will take a filename, clean up some data, and insert data into two tables: nba_games and nba_plays
+```{r}
+parse_nba_file = function(dir,file_name) {
+  #read the csv
+  play.df = read.csv(paste('NBA', dir, file_name, sep='/'), stringsAsFactors = FALSE, na.strings = c('',' ','unknown'))
+  
+  # Let's extract some game info from the filename
+  
+  #The filename is close to a - separated list, just need to make a few adjustments
+  file.clean = str_replace(str_replace_all(file_name, '[\\[\\](.csv)]',''),'@','-')
+  game.info = unlist(str_split(file.clean,'-'))
+  #we actually want to put the first three back together as they make up the date
+  game.info = c(str_c(game.info[1:3],collapse = '-'),game.info[4:6])
+  
+  # the rest of the game info we'll get from the final row in the dataset, as it has to do with how the game ended up
+  last.row = play.df[nrow(play.df),]
+  game.info = c(game.info,unlist(unname(last.row[c('away_score', 'home_score', 'data_set', 'period')])))
+  
+  #collapse into insert statement and insert into DB
+  sql_string = paste0("'",game.info,"'", collapse = ', ')
+  query <- paste("INSERT INTO nba_games (date, id, away_team, home_team, away_score, home_score, data_set, periods) values (",
+                 sql_string,')')
+  res <- dbSendQuery(con,query)
+  
+  #Now we'll insert the game info from the play dataframe we read above
+  
+  #Let's get rid of equal sign and quotes around the game id.
+  play.df = mutate(play.df, game_id =  str_extract_all(game_id, '\\d+', ""))
+  
+  #Data set and Date are fields that are the same for every play of a specific game, and we have them in our games table.  
+  #To keep things tidy, we will remove these.
+  play.df = select(play.df, -c(date,data_set))
+  
+  #Switch time columns to seconds
+  time.columns = c('remaining_time', 'elapsed', 'play_length')
+  play.df = mutate_at(play.df,time.columns, function(x) lapply(x,time_convert))
+  
+  #This line will escape out single quotes, and change NA's AND Blanks to NULL, then combine it all into a string for inserting into the DB.
+  sql_list = apply(play.df, 1, function(x) str_c(str_replace(str_replace(str_replace_na(str_c("'",str_replace_all(x,"'","\\\\'"), "'"),"NULL"),"^''","NULL"),"^'NA'","NULL"), collapse = ", "))
+  
+  #Now I will take that list and collapse into one big set of inserts
+  #This should be more effecient than inserting each play one at a time.
+  sql_string = paste0('(', sql_list, ')', collapse = ', ')
+  
+  #Insert the plays
+  query <- paste("INSERT INTO nba_plays (game_id,a1,a2,a3,a4,a5,h1,h2,h3,h4,h5,period,away_score,home_score,remaining_time,elapsed,play_length,play_id,team,event_type,assist,away,home,block,sub_entered,sub_left,num,opponent,outof,player,points,possession,reason,result,steal,type,shot_distance,original_x,original_y,converted_x,converted_y,description) VALUES",
+                 sql_string)
+  res <- dbSendQuery(con,query)
+  return(1)
+}
+```
+
+This function will take a directory, list all of the csv files in it, and run the "parse_nba_file" function on each file
+```{r}
+parse_all_nba_files = function(dir) {
+  file.list = list.files(paste('NBA',dir, sep='/'))
+  # There is a "combined" file, but we need info from the filenames themselves so we'll use those instead.
+  
+  file.list = file.list[str_detect(file.list, '^(?!.*combined)')]
+  file.list = file.list[str_detect(file.list, '.*csv')]
+  lapply(file.list, function(x) parse_nba_file(dir, x))
+}
+```
+
+Now let's list out our main directories and run the above functions on them.
+I want to make sure I'm getting the unzipped directories, not the zip files
+```{r}
+dir.list = list.files('NBA')
+dir.list = dir.list[str_detect(dir.list, '^(?!.*zip)')]
+
+fun = lapply(dir.list,parse_all_nba_files)
+```
+
+I had originally meant to insert the teams through the above scripts, but I needed to manually translate to what the "sports_database" called these same teams.
+So, instead of an elegant solution, I just present my team translations here.
+```{r}
+query <- "select distinct home_team from nba_games"
+res <- dbSendQuery(con,query)
+teams <- dbFetch(res, n=-1)
+as.list(teams)
+query <- "insert into nba_teams (short_code,sports_database_name) values
+               ('ATL','Hawks'), ('BKN','Nets'), ('BOS','Celtics'), ('CHA','Hornets'), ('CHI','Bulls'), ('CLE','Cavaliers'), ('DAL','Mavericks'),
+               ('DEN','Nuggets'), ('DET','Pistons'), ('GSW','Warriors'), ('HOU','Rockets'), ('IND','Pacers'), ('LAC','Clippers'), ('LAL','Lakers'),
+               ('MEM','Grizzlies'), ('MIA','Heat'), ('MIL','Bucks'), ('MIN','Timberwolves'), ('NJN','Nets'), ('NOH','Pelicans'), ('NOK','Pelicans'), 
+               ('NOP','Pelicans'), ('NYK','Knicks'), ('OKC','Thunder'), ('ORL','Magic'), ('PHI','Seventysixers'), ('PHX','Suns'), ('POR','Trailblazers'),
+               ('SAC','Kings'), ('SAS','Spurs'), ('SEA','Supersonics'), ('TOR','Raptors'), ('UTA','Jazz'), ('WAS','Wizards')"
+res <- dbSendQuery(con,query)
+```
+
+Stay tuned for Part II, where we'll scrape the Vegas line and see just how good these gamblers are at predicting outcomes.
